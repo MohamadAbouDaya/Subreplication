@@ -8,7 +8,6 @@ price bound.
 
 from __future__ import annotations
 
-import itertools
 
 import numpy as np
 from numpy.typing import NDArray
@@ -67,13 +66,37 @@ def _find_crossings(
 ) -> NDArray:
     """Find the interior zero-crossings of *phi* (merged and cleaned).
 
+    A crossing is a change of sign of *phi* between consecutive grid points.
+    Grid points at which *phi* is numerically zero inherit the sign of the last
+    non-zero value to their left, so that
+
+      * a genuine -/+ transition that passes through an exact zero is counted
+        once, and
+      * the plateau on which *phi* vanishes identically -- the region where
+        both empirical CDFs are clamped, i.e. x beyond the range of the asset
+        and k - x beyond the range of the aggregate -- never produces a
+        spurious crossing one grid step below the largest atom of the asset.
+
     Returns the merged crossing locations (without boundary padding).
     """
     if min_gap is None:
         min_gap = 0.0  # no merging by default; analytical cash handles all strike sets
 
-    signs = np.sign(phi)
-    sign_changes = np.where(np.diff(signs) != 0)[0]
+    n_atoms = max(len(p1), 1)
+    tol = 1e-3 / n_atoms  # far below the 1/n resolution of the empirical CDFs
+    signs = np.sign(phi).astype(np.int8)
+    signs[np.abs(phi) < tol] = 0
+
+    nonzero = signs != 0
+    if not nonzero.any():
+        return np.empty(0)
+    # Forward-fill zeros with the last non-zero sign (leading zeros stay 0).
+    last_nz = np.where(nonzero, np.arange(len(signs)), 0)
+    np.maximum.accumulate(last_nz, out=last_nz)
+    filled = signs[last_nz]
+    filled[: int(np.argmax(nonzero))] = 0
+
+    sign_changes = np.where((np.diff(filled) != 0) & (filled[:-1] != 0))[0]
 
     if len(sign_changes) == 0:
         return np.empty(0)
@@ -274,7 +297,7 @@ def sub_portfolio(
     n_mc: int = 1_000_000,
     upper: float | None = None,
     seed: int | None = None,
-    top_k_parities: int = 64,
+    parity_batch: int = 64,
 ) -> SubportfolioResult:
     """Compute the subreplicating portfolio for a basket call with strike *kb*.
 
@@ -284,18 +307,19 @@ def sub_portfolio(
     numerically ambiguous for OTM options — we search over the 2^n parity
     combinations and keep the one that maximises HV = v + cash.
 
-    Speedups vs. the naive 2^n loop:
+    The search is exact, and cheaper than the naive 2^n loop:
       * The per-asset candidate set {0} ∪ crossings ∪ {kb} is invariant under
         the parity choice, so the exhaustive-vertex mesh is built exactly once.
-      * HV = v + cash where v is additive across assets. We pre-compute
-        v(asset, parity) in O(n·2) time, form v-totals for all 2^n parities in
-        O(n·2^n) integer work, and only evaluate the expensive cash term for
-        the top ``top_k_parities`` parities ranked by v. At n=10 this cuts the
-        number of full cash evaluations from 1024 to 64 while preserving the
-        global HV maximum in every tested case.
+      * HV = v + cash where v is additive across assets and the cash term is
+        never positive (Ψ(0) = 0), hence HV <= v for every parity.  Parities
+        are evaluated in decreasing order of v, in batches of ``parity_batch``,
+        and the search stops as soon as the next v cannot exceed the best HV
+        found so far.  Ranking by v alone and keeping a fixed number of
+        parities is *not* safe -- the cash term varies by tens of currency
+        units across parities -- so no fixed cut-off is used.
 
-    Parameters as before; ``top_k_parities`` caps the number of parities for
-    which the full analytical cash is evaluated.
+    ``parity_batch`` only controls memory use (the batched cash evaluation
+    allocates a (vertices x batch) array); it does not affect the result.
     """
     del seed, n_mc, upper  # kept for API stability; no RNG use inside.
     n_rows, n_assets = prices.shape
@@ -342,7 +366,7 @@ def sub_portfolio(
             payoffs = np.maximum(col[:, None] - strikes[None, :], 0.0)
             v_delta[i, pb] = float((payoffs.mean(axis=0)) @ signs)
 
-    # --- enumerate 2^n parities, rank by v, keep top-k --------------------
+    # --- enumerate 2^n parities, rank by v ---------------------------------
     n_parities = 1 << n_assets
     parity_bits = np.array(
         [[(p >> i) & 1 for i in range(n_assets)] for p in range(n_parities)],
@@ -361,8 +385,9 @@ def sub_portfolio(
             phi=phi_list,
         )
 
-    k = min(top_k_parities, int(valid.sum()))
-    order = np.argsort(-np.where(valid, v_totals, -np.inf))[:k]
+    # All valid parities, in decreasing order of v (stable for reproducibility).
+    order = np.argsort(-np.where(valid, v_totals, -np.inf), kind="stable")
+    order = order[: int(valid.sum())]
 
     # --- build the shared vertex mesh once --------------------------------
     candidates = [
@@ -392,24 +417,36 @@ def sub_portfolio(
                 tbl[pb, k_idx] = _options_at(float(x), strikes)
         options_table.append(tbl)
 
-    # --- evaluate cash for the top-k parities in one batched sweep --------
-    # options_sum has shape (V, k); we add each asset's contribution via a
-    # broadcasting gather parameterised by the asset's top-k parity bits.
-    bits_top = parity_bits[order]                     # (k, n_assets)
-    options_sum = np.zeros((V, len(order)))
-    for i in range(n_assets):
-        # contrib[v, p] = options_table[i][bits_top[p, i], idx_stack[v, i]]
-        contrib = options_table[i][bits_top[:, i][None, :], idx_stack[:, i][:, None]]
-        options_sum += contrib
-    cash_per_parity = (basket_minus_s[:, None] - options_sum).min(axis=0)  # (k,)
-    hv_per_parity = cash_per_parity + v_totals[order]
+    # --- exact search over parities with pruning ---------------------------
+    # cash <= 0 always, hence HV = v + cash <= v.  Parities are visited in
+    # decreasing order of v; once the next v is no larger than the best HV
+    # found so far, no remaining parity can win and the search stops.
+    best_hv = -np.inf
+    best_idx = -1
+    best_cash = np.nan
+    batch_size = max(1, int(parity_batch))
+    for start in range(0, len(order), batch_size):
+        batch = order[start : start + batch_size]
+        if v_totals[batch[0]] <= best_hv:
+            break
+        bits = parity_bits[batch]                          # (b, n_assets)
+        options_sum = np.zeros((V, len(batch)))
+        for i in range(n_assets):
+            # contrib[v, p] = options_table[i][bits[p, i], idx_stack[v, i]]
+            options_sum += options_table[i][bits[:, i][None, :], idx_stack[:, i][:, None]]
+        cash_batch = (basket_minus_s[:, None] - options_sum).min(axis=0)  # (b,)
+        hv_batch = cash_batch + v_totals[batch]
+        j = int(np.argmax(hv_batch))
+        if hv_batch[j] > best_hv:
+            best_hv = float(hv_batch[j])
+            best_idx = int(batch[j])
+            best_cash = float(cash_batch[j])
 
-    best_local = int(np.argmax(hv_per_parity))
-    best_bits = bits_top[best_local]
+    best_bits = parity_bits[best_idx]
     best_m = [strikes_by_parity[i][best_bits[i]].copy() for i in range(n_assets)]
 
-    cash = float(cash_per_parity[best_local])
-    v = float(v_totals[order[best_local]])
+    cash = best_cash
+    v = float(v_totals[best_idx])
     return SubportfolioResult(
         cash=cash,
         v=v,

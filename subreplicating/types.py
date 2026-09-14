@@ -23,7 +23,7 @@ class RearrangementResult:
 class SubportfolioResult:
     """Result returned by sub_portfolio()."""
 
-    cash: float                 # cash component (from Monte Carlo)
+    cash: float                 # cash component (exact, vertex enumeration)
     v: float                    # vanilla-options component
     value: float                # total = cash + v
     m: list[np.ndarray]         # strikes per asset
