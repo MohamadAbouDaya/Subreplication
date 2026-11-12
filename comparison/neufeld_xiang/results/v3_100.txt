@@ -1,0 +1,5 @@
+K = 100.00  m =   64  LB = 0.098485  UB = 0.306154 (se 2.6e-04)  iter =  803  time =  138.5s  timeout = 0
+[Warning: LSIP time limit exceeded] 
+[> In LSIPMinCuttingPlaneAlgo/run (line 296)
+In run_basket_uniform (line 50)] 
+K = 100.00  m =  128  LB = -0.445563  UB = 0.222869 (se 3.7e-04)  iter = 1564  time = 2400.7s  timeout = 1

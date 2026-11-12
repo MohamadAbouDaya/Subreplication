@@ -8,6 +8,7 @@ from .subreplication import (
     phi_calc,
     polish_strikes,
     port_value,
+    refine_portfolio,
     sub_portfolio,
 )
 from .types import PortfolioValueResult, RearrangementResult, SubportfolioResult
@@ -20,7 +21,7 @@ __all__ = [
     # rearrangement
     "ra", "bra", "brave", "basket_call_objective",
     # subreplication
-    "phi_calc", "k_finder", "sub_portfolio", "port_value", "polish_strikes",
+    "phi_calc", "k_finder", "sub_portfolio", "port_value", "polish_strikes", "refine_portfolio",
     "analytical_cash", "monte_carlo_cash",
     # result types
     "RearrangementResult", "SubportfolioResult", "PortfolioValueResult",

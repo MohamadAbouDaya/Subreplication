@@ -1,7 +1,7 @@
 """Backward-compatible alias.
 
-The "best-fit" search (RA and BRA, variance and K-aware objectives, Nelder-Mead
-polish) is now the default pipeline of ``three_asset.py``; this module is kept
+The "best-fit" search (RA and BRA, variance and K-aware objectives, strike
+refinement) is now the default pipeline of ``three_asset.py``; this module is kept
 so that ``python -m subreplicating.examples.three_asset_best`` still works.
 """
 

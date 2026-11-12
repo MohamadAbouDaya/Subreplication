@@ -290,6 +290,29 @@ def _options_at(x: float, strikes: NDArray) -> float:
     return float((np.maximum(x - strikes, 0.0) * signs).sum())
 
 
+def _trivial_portfolio(prices: NDArray, kb: float, phi: list[NDArray]) -> SubportfolioResult:
+    """The better of the two portfolios that need no strike search.
+
+    * linear: long every asset, cash -kb (no strikes), value E[sum] - kb;
+    * out-of-the-money: a call struck at kb on every asset (strikes [0, kb],
+      cash 0), value sum_i E[(X_i - kb)^+] >= 0.
+
+    Both sub-replicate the basket call for any marginals.  The first is
+    optimal when the basket can be kept above kb, the second when it can be
+    kept below kb; for jointly mixable marginals one of the two is optimal at
+    every strike (Proposition 3.4 of the paper).
+    """
+    n_assets = prices.shape[1]
+    linear = [np.empty(0)] * n_assets
+    otm = [np.array([0.0, kb])] * n_assets
+    best = None
+    for m in (linear, otm):
+        cash, v = analytical_cash(m, kb), _compute_v(prices, m)
+        if best is None or cash + v > best.value:
+            best = SubportfolioResult(cash=cash, v=v, value=cash + v, m=[x.copy() for x in m], phi=phi)
+    return best
+
+
 def sub_portfolio(
     prices: NDArray,
     kb: float,
@@ -298,6 +321,8 @@ def sub_portfolio(
     upper: float | None = None,
     seed: int | None = None,
     parity_batch: int = 64,
+    trivial_tol: float = 1e-9,
+    max_crossings: int = 200,
 ) -> SubportfolioResult:
     """Compute the subreplicating portfolio for a basket call with strike *kb*.
 
@@ -320,9 +345,32 @@ def sub_portfolio(
 
     ``parity_batch`` only controls memory use (the batched cash evaluation
     allocates a (vertices x batch) array); it does not affect the result.
+
+    Before any of this, the coupling is checked against the two portfolios
+    that need no strikes (see ``_trivial_portfolio``).  If one of them already
+    matches the basket value under the coupling up to ``trivial_tol`` (relative
+    to the strike), it is optimal by weak duality and is returned at once.
+    This is what happens when the basket stays on one side of the strike, in
+    particular for jointly mixable marginals, where the phi functions carry no
+    information.  The same portfolio is the fallback when an asset shows more
+    than ``max_crossings`` sign changes of phi (numerical noise around a basket
+    that is almost constant at the strike), and the result of the strike
+    search is never allowed to be worse than it.
+
+    The strikes of the strike search are always reported in ``m_search`` (with
+    their value in ``value_search``), also when a strike-free portfolio is
+    returned because it is worth more than the *unrefined* strikes.  Refine
+    with :func:`refine_portfolio`, which polishes ``m_search`` and only then
+    compares with the strike-free portfolios.
     """
     del seed, n_mc, upper  # kept for API stability; no RNG use inside.
     n_rows, n_assets = prices.shape
+
+    # --- portfolios without strikes: optimal for degenerate couplings -----
+    trivial = _trivial_portfolio(prices, kb, [])
+    bv = float(np.maximum(prices.sum(axis=1) - kb, 0.0).mean())
+    if bv - trivial.value <= trivial_tol * max(1.0, abs(kb)):
+        return trivial
 
     # --- phi and zero-crossings per asset ---------------------------------
     xgrid = np.linspace(kb / n_partition, kb, n_partition)
@@ -337,6 +385,10 @@ def sub_portfolio(
         phi = phi_calc(p1, p2, kb, xgrid)
         phi_list.append(phi)
         crossings_list.append(_find_crossings(phi, xgrid, p1, p2, kb))
+
+    trivial.phi = phi_list
+    if max(len(c) for c in crossings_list) > max_crossings:
+        return trivial
 
     # --- per-(asset, parity) candidate strike arrays ----------------------
     strikes_by_parity = _build_candidate_strikes(crossings_list, prices, kb)
@@ -447,12 +499,22 @@ def sub_portfolio(
 
     cash = best_cash
     v = float(v_totals[best_idx])
+    if trivial.value > cash + v:
+        # The unrefined strikes are worth less than a strike-free portfolio.
+        # Keep them on the result: after refinement they may be worth more
+        # (deep out-of-the-money strikes, where the value of the bound is of
+        # the order of the grid error of the phi-crossings).
+        trivial.m_search = [x.copy() for x in best_m]
+        trivial.value_search = cash + v
+        return trivial
     return SubportfolioResult(
         cash=cash,
         v=v,
         value=cash + v,
         m=best_m,
         phi=phi_list,
+        m_search=[x.copy() for x in best_m],
+        value_search=cash + v,
     )
 
 
@@ -479,29 +541,65 @@ except Exception:  # pragma: no cover - numba is optional
     _NUMBA_AVAILABLE = False
 
 
+def local_search(
+    neg_obj,
+    x0: NDArray,
+    xatol: float,
+    fatol: float,
+    maxiter: int,
+    max_rounds: int = 4,
+) -> tuple[NDArray, float]:
+    """Derivative-free local minimisation: Nelder-Mead and Powell, alternated.
+
+    Nelder-Mead alone stalls on the hedging-value surface once there are more
+    than a handful of free strikes (in the six-asset example of the paper it
+    stopped up to 3e-5 short of the local maximum); Powell's line searches move
+    along the kinks that stop it.  The two are alternated until a full round
+    improves the objective by less than ``fatol``.  The best point visited is
+    returned, so the objective never increases relative to ``x0``.
+    """
+    from scipy.optimize import minimize
+
+    best_x = np.asarray(x0, float).copy()
+    best_f = float(neg_obj(best_x))
+    for _ in range(max_rounds):
+        start_f = best_f
+        for method, opts in (
+            ("Nelder-Mead", {"xatol": xatol, "fatol": fatol, "maxiter": maxiter,
+                             "adaptive": len(best_x) > 6}),
+            ("Powell", {"xtol": xatol, "ftol": fatol, "maxiter": maxiter,
+                        "maxfev": 40 * maxiter}),
+        ):
+            res = minimize(neg_obj, best_x, method=method, options=opts)
+            if res.fun < best_f:
+                best_x, best_f = np.asarray(res.x, float).copy(), float(res.fun)
+        if start_f - best_f <= fatol:
+            break
+    return best_x, best_f
+
+
 def polish_strikes(
     prices: NDArray,
     m_init: list[NDArray],
     kb: float,
-    xatol: float = 1e-5,
-    fatol: float = 1e-8,
+    xatol: float = 1e-6,
+    fatol: float = 1e-10,
     maxiter: int | None = None,
     use_numba: bool | None = None,
 ) -> tuple[list[NDArray], float]:
     """Locally polish strike values to maximise HV for a fixed coupling.
 
     HV(m) is continuous and piecewise-linear in the strike values, so a
-    gradient-free local optimiser (Nelder-Mead) can close (a) the finite-grid
-    discretisation error of the phi-crossing strikes and (b) the misalignment
-    between the variance objective used inside BRA and the HV surface.
+    gradient-free local search (:func:`local_search`: Nelder-Mead alternated
+    with Powell) can close (a) the finite-grid discretisation error of the
+    phi-crossing strikes and (b) the misalignment between the variance
+    objective used inside BRA and the HV surface.
 
     The inner evaluation re-uses a fixed integer vertex-index mesh (rebuilt
     only if the candidate cardinality changes), avoiding the ~1M-vertex mesh
     allocation that the generic ``analytical_cash`` would otherwise repeat on
     every Nelder-Mead step. This makes the polish tractable at n ≥ 10.
     """
-    from scipy.optimize import minimize
-
     n_assets = prices.shape[1]
     n_rows = prices.shape[0]
     inv_n_rows = 1.0 / n_rows
@@ -631,9 +729,28 @@ def polish_strikes(
 
         return -(cash + v)
 
-    res = minimize(
-        neg_hv, flat0, method="Nelder-Mead",
-        options={"xatol": xatol, "fatol": fatol, "maxiter": maxiter},
-    )
-    m_best = _rebuild_m(res.x)
-    return m_best, float(-res.fun)
+    x_best, f_best = local_search(neg_hv, flat0, xatol, fatol, maxiter)
+    m_best = _rebuild_m(x_best)
+    return m_best, float(-f_best)
+
+
+def refine_portfolio(
+    prices: NDArray,
+    sr: SubportfolioResult,
+    kb: float,
+    **polish_kwargs,
+) -> tuple[list[NDArray], float]:
+    """Strike refinement of Algorithm 1, applied to the output of ``sub_portfolio``.
+
+    Polishes the strikes of the strike search (``sr.m_search``) and returns the
+    better of the refined portfolio and the portfolio already held in ``sr``
+    (which is never worse than the two strike-free portfolios).  The comparison
+    is made *after* the refinement: for deep out-of-the-money strikes the
+    unrefined phi-crossing strikes can be worth less than the strike-free
+    portfolios although the refined ones attain the basket value.
+    """
+    start = sr.m_search if sr.m_search is not None else sr.m
+    m, hv = polish_strikes(prices, start, kb, **polish_kwargs)
+    if hv > sr.value:
+        return m, hv
+    return [x.copy() for x in sr.m], float(sr.value)

@@ -2,8 +2,8 @@
 
 Equal-weighted portfolio of 6 assets, S_0 = 100 each, implied vols
 91.5%, 75.5%, 82.5%, 35.5%, 20%, 15%, maturity half a year.  Same pipeline as
-``three_asset.py`` (RA and BRA, variance and K-aware objectives, Nelder-Mead
-polish), which is what Table 2 of the paper reports.
+``three_asset.py`` (RA and BRA, variance and K-aware objectives, strike
+refinement); the HV and BV columns of Table 3 of the paper.
 
 Usage:
     python -m subreplicating.examples.six_asset
@@ -36,7 +36,7 @@ def main():
     print(f"  N = {N}, T = {TIME_PERIOD}, restarts per config = {RESTARTS}")
     print(f"  Weights: {np.round(WEIGHTS, 2)}")
     print(f"  Implied vols: {IMPLIED_VOLS}")
-    print("  Search: [BRA, RA] x [variance, K-aware] + Nelder-Mead polish")
+    print("  Search: [BRA, RA] x [variance, K-aware] + strike refinement")
     print()
 
     prices = lognormal_marginals(WEIGHTS, IMPLIED_VOLS, TIME_PERIOD, N)

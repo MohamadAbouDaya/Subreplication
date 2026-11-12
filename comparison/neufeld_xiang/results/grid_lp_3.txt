@@ -1,0 +1,12 @@
+3 assets: best portfolio with strikes on the augmented grid  vs  our portfolio
+  (LP and 'ours, truncated' use the marginals truncated at the 1 - 1e-12 quantile; HV_ex the exact ones)
+  K =  100  m =   4  knots [7, 7, 7]  LP optimum in [0.102179845, 0.102179845]  ours, truncated = 0.102179846  (difference -2.7e-10)  HV_ex = 0.102179846  [0s]
+  K =  100  m =  16  knots [19, 19, 19]  LP optimum in [0.102179845, 0.102179846]  ours, truncated = 0.102179846  (difference -6.5e-11)  HV_ex = 0.102179846  [0s]
+  K =  105  m =   4  knots [6, 6, 7]  LP optimum in [0.018096864, 0.018096864]  ours, truncated = 0.018096864  (difference +1.4e-10)  HV_ex = 0.018096864  [0s]
+  K =  105  m =  16  knots [18, 18, 19]  LP optimum in [0.018096864, 0.018096864]  ours, truncated = 0.018096864  (difference +1.4e-10)  HV_ex = 0.018096864  [0s]
+  K =  110  m =   4  knots [6, 6, 7]  LP optimum in [0.004040027, 0.004040027]  ours, truncated = 0.004040027  (difference +2.4e-11)  HV_ex = 0.004040027  [0s]
+  K =  110  m =  16  knots [18, 18, 19]  LP optimum in [0.004040027, 0.004040027]  ours, truncated = 0.004040027  (difference +2.4e-11)  HV_ex = 0.004040027  [0s]
+  K =  115  m =   4  knots [6, 6, 6]  LP optimum in [0.001017102, 0.001017102]  ours, truncated = 0.001017102  (difference +1.8e-15)  HV_ex = 0.001017102  [0s]
+  K =  115  m =  16  knots [18, 18, 18]  LP optimum in [0.001017102, 0.001017102]  ours, truncated = 0.001017102  (difference +5.2e-14)  HV_ex = 0.001017102  [0s]
+  K =  120  m =   4  knots [6, 6, 6]  LP optimum in [0.000278131, 0.000278131]  ours, truncated = 0.000278131  (difference -8.0e-15)  HV_ex = 0.000278131  [0s]
+  K =  120  m =  16  knots [18, 18, 18]  LP optimum in [0.000278131, 0.000278131]  ours, truncated = 0.000278131  (difference +4.4e-14)  HV_ex = 0.000278131  [0s]

@@ -4,12 +4,13 @@ Pipeline for one basket strike ``kb``:
 
   1. run each rearrangement algorithm (RA / BRA) with each objective
      (variance proxy, K-aware basket-call objective) for ``restarts`` random
-     initialisations and keep the coupling with the highest raw hedging value
-     HV = v + cash (exact cash, Proposition 2.1);
+     initialisations and keep the coupling whose phi-crossing strikes have the
+     highest hedging value HV = v + cash (exact cash, Proposition 2.3);
   2. compute the phi-crossing strikes for that coupling (``sub_portfolio``,
      which also performs the exact parity search and the snap-to-kb rule);
-  3. polish the strike values with Nelder-Mead (``polish_strikes``);
-  4. report HV (raw and polished), the BRA-approximated basket value BV and the
+  3. refine the strike values by local search and compare the result with the
+     strike-free portfolios (``refine_portfolio``);
+  4. report HV (raw and refined), the BRA-approximated basket value BV and the
      co-monotone upper bound.
 """
 
@@ -23,7 +24,7 @@ import numpy as np
 from joblib import Parallel, delayed
 
 from ..pricing import call_price
-from ..subreplication import polish_strikes, port_value, sub_portfolio
+from ..subreplication import port_value, refine_portfolio, sub_portfolio
 
 Algo = Callable[..., Any]
 Objective = Callable[[np.ndarray], float] | None  # None = algo's default (variance)
@@ -58,7 +59,26 @@ def _one_restart(
         kwargs["f"] = f
     r = algo(prices, **kwargs)
     sr = sub_portfolio(r.X, kb, n_partition=n_partition)
-    return sr.value, r
+    return selection_key(r.X, sr, kb), r
+
+
+def selection_key(X: np.ndarray, sr, kb: float) -> tuple[int, float]:
+    """Rank the output of one restart; the largest key is selected.
+
+    * (2, HV) when the portfolio already matches the basket value under the
+      coupling: both are optimal by weak duality and nothing can beat them;
+    * (1, HV of the phi-crossing strikes) otherwise.  This is the value of the
+      strike search *before* the comparison with the strike-free portfolios,
+      so that restarts are not all tied at the value of a strike-free
+      portfolio when the unrefined strikes are worth less than it;
+    * (0, HV) when no strike search was carried out.
+    """
+    bv = call_price(X.sum(axis=1), kb)
+    if bv - sr.value <= 1e-9 * max(1.0, abs(kb)):
+        return (2, float(sr.value))
+    if sr.value_search is not None:
+        return (1, float(sr.value_search))
+    return (0, float(sr.value))
 
 
 def run_best_coupling(
@@ -73,7 +93,8 @@ def run_best_coupling(
     n_jobs: int = -1,
 ) -> tuple[np.ndarray, float]:
     """Run each (algo, objective) pair ``restarts`` times in parallel and return
-    the coupling that maximises the (raw) subreplicating portfolio value.
+    the coupling that maximises the (raw) subreplicating portfolio value
+    (see :func:`selection_key`).
 
     ``objectives=(None,)`` uses each algorithm's default (variance).  Pass e.g.
     ``[None, basket_call_objective(kb)]`` to also search with the K-aware
@@ -100,10 +121,10 @@ class PipelineResult:
     kb: float
     strikes_raw: list[np.ndarray]   # phi-crossing strikes (after parity search / snap)
     hv_raw: float                   # HV at the raw strikes
-    strikes: list[np.ndarray]       # polished strikes
-    cash: float                     # exact cash component at the polished strikes
-    v: float                        # vanilla-option component at the polished strikes
-    hv: float                       # polished hedging value = cash + v
+    strikes: list[np.ndarray]       # refined strikes
+    cash: float                     # exact cash component at the refined strikes
+    v: float                        # vanilla-option component at the refined strikes
+    hv: float                       # refined hedging value = cash + v
     bv: float                       # basket call value under the selected coupling
     ub: float                       # co-monotone (upper) bound, for reference
 
@@ -127,14 +148,15 @@ def run_pipeline(
     )
     sr = sub_portfolio(prices_r, kb, n_partition=n_partition)
     if polish:
-        m, _ = polish_strikes(prices_r, sr.m, kb)
+        m, _ = refine_portfolio(prices_r, sr, kb)
     else:
         m = sr.m
     pv = port_value(prices_r, m, kb)
+    searched = sr.m_search is not None
     return PipelineResult(
         kb=kb,
-        strikes_raw=sr.m,
-        hv_raw=sr.value,
+        strikes_raw=sr.m_search if searched else sr.m,
+        hv_raw=sr.value_search if searched else sr.value,
         strikes=m,
         cash=pv.cash,
         v=pv.v,
@@ -147,13 +169,13 @@ def run_pipeline(
 def print_report(res: PipelineResult) -> None:
     gap = (res.bv - res.hv) / res.bv * 100 if res.bv > 1e-8 else 0.0
     print(f"  Basket strike K = {res.kb:g}")
-    print("  Strikes per asset (raw -> polished):")
+    print("  Strikes per asset (raw -> refined):")
     for i, (raw, pol) in enumerate(zip(res.strikes_raw, res.strikes, strict=True)):
         print(f"    asset {i}: {np.round(raw, 4).tolist()} -> {np.round(pol, 4).tolist()}")
     print(f"  Cash component:          {res.cash:12.6f}")
     print(f"  Options component:       {res.v:12.6f}")
     print(f"  HV raw (phi strikes):    {res.hv_raw:12.6f}")
-    print(f"  HV polished:             {res.hv:12.6f}")
+    print(f"  HV refined:              {res.hv:12.6f}")
     print(f"  Basket call value (BV):  {res.bv:12.6f}")
     print(f"  Co-monotone upper bound: {res.ub:12.6f}")
     print(f"  Gap (BV-HV)/BV:          {gap:11.4f}%")

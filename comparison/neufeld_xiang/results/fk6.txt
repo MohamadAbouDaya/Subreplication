@@ -1,0 +1,10 @@
+K = 100.00  m =    4 (+ extra knots)  LB = 0.327308  UB = 2.241640 (se 1.6e-03)  iter =   99  time =    6.6s  timeout = 0
+K = 100.00  m =   16 (+ extra knots)  LB = 0.327308  UB = 1.007406 (se 1.3e-03)  iter =  232  time =   20.6s  timeout = 0
+K = 110.00  m =    4 (+ extra knots)  LB = 0.141125  UB = 1.655086 (se 1.5e-03)  iter =   87  time =    3.9s  timeout = 0
+K = 110.00  m =   16 (+ extra knots)  LB = 0.141125  UB = 0.625920 (se 1.1e-03)  iter =  151  time =   11.4s  timeout = 0
+K = 120.00  m =    4 (+ extra knots)  LB = 0.069818  UB = 3.132012 (se 2.6e-03)  iter =   66  time =    2.5s  timeout = 0
+K = 120.00  m =   16 (+ extra knots)  LB = 0.069818  UB = 0.546414 (se 1.0e-03)  iter =  123  time =    7.9s  timeout = 0
+K = 130.00  m =    4 (+ extra knots)  LB = 0.037550  UB = 0.930432 (se 1.2e-03)  iter =   53  time =    2.4s  timeout = 0
+K = 130.00  m =   16 (+ extra knots)  LB = 0.037550  UB = 0.345504 (se 5.9e-04)  iter =  118  time =    7.2s  timeout = 0
+K = 140.00  m =    4 (+ extra knots)  LB = 0.021452  UB = 0.594341 (se 9.8e-04)  iter =   63  time =    2.8s  timeout = 0
+K = 140.00  m =   16 (+ extra knots)  LB = 0.021452  UB = 0.484994 (se 6.1e-04)  iter =  110  time =    7.5s  timeout = 0

@@ -1,0 +1,2 @@
+K = 120.00  m =   32  LB = 0.046681  UB = 1.066030 (se 1.5e-03)  iter = 1872  time =  623.0s  timeout = 0
+K = 120.00  m =   64  LB = -63.052591  UB = 8.084036 (se 8.0e-03)  iter = 2470  time = 2401.3s  timeout = 1

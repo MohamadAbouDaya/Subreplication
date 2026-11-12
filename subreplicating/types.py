@@ -28,6 +28,13 @@ class SubportfolioResult:
     value: float                # total = cash + v
     m: list[np.ndarray]         # strikes per asset
     phi: list[np.ndarray]       # phi function per asset
+    # Strikes found by the strike search (phi-crossings and parity choice) and
+    # their hedging value, before the comparison with the strike-free
+    # portfolios.  None when no strike search was carried out.  These are the
+    # strikes to refine: their unrefined value can be below a strike-free
+    # portfolio that the refined strikes beat (see ``refine_portfolio``).
+    m_search: list[np.ndarray] | None = None
+    value_search: float | None = None
 
 
 @dataclass
